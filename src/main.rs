@@ -257,19 +257,6 @@ fn load_file(filename: &str) -> String {
     code
 }
 
-// fn get_function_name(sexp: &SExp) -> String {
-//     match sexp {
-//         SExp::ATOM(atom) => {
-//             match atom {
-//                 Atom::SYMBOL(name) => name.to_string(),
-//                 _ => panic!("invalid atom in function call"),
-//             }
-//         }
-
-//         SExp::CONS(car, _) => get_function_name(&car.sexp),
-//     }
-// }
-
 // generates code to remove the bindings inserted in beginning of the function
 fn gen_remove_parameter_bindings(params: &SExp, output: &mut Output) {
     if let SExp::CONS(car, cdr) = params {
@@ -330,26 +317,21 @@ fn gen_load_sexp(symbol_name: &str, output: &mut Output) -> String {
     _ => panic!(\"could not load function as SExp\"),
 }};",  
     var, symbol_name));
-    // output.emit(&format!("let {} = env.get(&String::from(\"{}\")).unwrap().0;", var, symbol_name));
+
     var
 }
 
-fn compile_defun(name_sexp: &mut SExp, node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) {
+fn compile_defun(name_sexp: &mut SExp, node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String {
     if let SExp::ATOM(atom) = name_sexp {
         if let Atom::SYMBOL(name) = atom {
-            // "(env.insert(\"{}\", {}, true), name, to_runtime_sexp(node))"
-            // insert function to env ? (at least uncompiled version so we can invoke it in interpreted code (eval an such))
-
             output.push_nesting();
             let name_index = *compiled_functions.get(name).unwrap_or(&0) + 1;
             compiled_functions.insert(name.to_string(), name_index);
             output.emit(&format!("fn {}_{} (sexp: SExp, mut env: &mut Env) -> SExp {{", name, compiled_functions.get(name).unwrap()));
-            // compiled_functions.insert(name.to_string());
 
             match &mut node.sexp {
                 SExp::CONS(params, body) => {
                     gen_bind_parameters(&params.sexp, output);
-                    // output.emit(&format!("// compiling body: {:?}", body));
 
                     if let SExp::CONS(real_body, _) = &mut body.sexp {
                         compile_node(real_body, env, compiled_functions, output);
@@ -365,77 +347,15 @@ fn compile_defun(name_sexp: &mut SExp, node: &mut Node, env: &mut Env, compiled_
             }
 
             output.emit("}");
-
             output.pop_nesting();
 
             // now add the function to the environment
             output.emit(&format!("env.insert_compiled_func(&String::from(\"{0}\"), {0}_{1});", name, name_index));
-            return;
+            return "SExp::ATOM(Atom::NIL)".to_string();
         }
     }
 
     panic!("invalid function name s-exp: {:?}", name_sexp);
-}
-
-// fn compile_add(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) {
-//     match &mut node.sexp {
-//         SExp::CONS(first, rest) => {
-//             compile_node(&mut *first, env, compiled_functions, output);
-//             let val1 = &first.place;
-
-//             match &mut rest.sexp {
-//                 SExp::CONS(second, _) => {
-//                     compile_node(&mut *second, env, compiled_functions, output);
-//                     let val2 = &second.place;
-
-//                     let new_var = gen_var();
-//                     output.emit(&format!("let mut {} = add({}, {}, &mut env);", &new_var, val1, val2));
-//                     node.place = new_var;
-//                 }
-
-//                 x => panic!("invalid right s-exp in add: {:?}", x),
-//             }   
-//         }
-
-//         x => panic!("invalid left s-exp in add: {:?}", x),
-//     }
-// }
-
-fn compile_function_call(name: &str, params: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String {
-    compile_node(params, env, compiled_functions, output);
-
-    match compiled_functions.get(name) {
-        Some(_) => {}
-        None => panic!("undefined function: {}", name),
-    }
-
-    let ret_var = gen_var();
-    let tmp_var = gen_var();
-
-    output.emit(&format!(
-"let mut {1} = env.get(&String::from(\"{0}\")).unwrap();
-let mut {2} = if {1}.1 {{
-    match {1}.0 {{
-        EnvElement::Func(func) => func({3}, &mut env),
-        EnvElement::SExp(sexp) => call_function(sexp, {3}, &mut env),
-    }}
-}} else {{
-    panic!(\"s-exp called is not a function\")
-}};",
-    name, tmp_var, ret_var, params.place));
-
-    // output.emit(&format!("let mut {} = {}({}, &mut env);", ret_var, name, params.place));
-
-    ret_var
-}
-
-fn compile_print(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String {
-    compile_node(node, env, compiled_functions, output);
-
-    let var = gen_var();
-    output.emit(&format!("let mut {} = lisp_print({}, &mut env);", var, node.place));
-    
-    var
 }
 
 fn compile_symbol_lookup(name: &str, cdr: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String{
@@ -472,43 +392,12 @@ fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap
                             match name.as_str() {
                                 "defun" => {
                                     match &mut cdr.sexp {
-                                        SExp::CONS(defun_name_node, func_def) => {
-                                            compile_defun(&mut defun_name_node.sexp, &mut *func_def, env, compiled_functions, output);
-
-                                            node.place = String::from("SExp::ATOM(Atom::NIL)");
-                                        }
-
+                                        SExp::CONS(defun_name_node, func_def) => node.place = compile_defun(&mut defun_name_node.sexp, &mut *func_def, env, compiled_functions, output),
                                         x => panic!("invalid s-exp in defun:{:?}", x),
                                     }
                                 }
 
-                                "print" => {
-                                    let new_place = compile_print(cdr, env, compiled_functions, output);
-                                    node.place = new_place;
-                                }
-
-                                // "+" => node.place = compile_function_call("add", cdr, env, compiled_functions, output),
-                                // "-" => node.place = compile_function_call("sub", cdr, env, compiled_functions, output),
-                                // "*" => node.place = compile_function_call("mul", cdr, env, compiled_functions, output),
-                                // "/" => node.place = compile_function_call("div", cdr, env, compiled_functions, output),
-
-                                function_name => {
-                                    node.place = compile_symbol_lookup(&function_name, cdr, env, compiled_functions, output);
-
-                                    // TODO: replace this with an emit of code that searches the env dynamically
-                                    // let val = env.get(&String::from(function_name)).unwrap_or((SExp::ATOM(Atom::SYMBOL(function_name.to_string())), false));
-                                    // if val.1 || compiled_functions.contains_key(function_name) { // if it's a function
-                                    //     node.place = compile_function_call(&function_name, cdr, env, compiled_functions, output);
-                                    // } else {
-                                    //     compile_node(car, env, compiled_functions, output);
-                                    //     compile_node(cdr, env, compiled_functions, output);
-                                    //     node.place = format!("SExp::CONS(Box::new({}), Box::new({}))", car.place, cdr.place);
-                                    // }
-                                    // output.emit(&format!("// compiling args: {:?}", cdr));
-                                    // compile_node(cdr, env, compiled_functions, output);
-
-                                    // node.place = compile_function_call(&function_name, cdr, env, compiled_functions, output);
-                                }
+                                function_name => node.place = compile_symbol_lookup(&function_name, cdr, env, compiled_functions, output),
                             }
                         }
 
@@ -547,89 +436,13 @@ fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap
 
         SExp::ATOM(atom) => {
             match atom {
-                Atom::NUM(num) => {
-                    node.place = format!("SExp::ATOM(Atom::NUM({}))", num);
-                    // node.place = num.to_string();
-                }
-    
-                Atom::SYMBOL(symbol) => {
-                    let new_place = gen_load_sexp(symbol, output);
-
-                    node.place = new_place;
-                }
-    
-                Atom::NIL => {
-                    node.place = format!("SExp::ATOM(Atom::NIL)");
-                }
+                Atom::NUM(num) => node.place = format!("SExp::ATOM(Atom::NUM({}))", num),
+                Atom::SYMBOL(symbol) => node.place = gen_load_sexp(symbol, output),
+                Atom::NIL => node.place = format!("SExp::ATOM(Atom::NIL)"),
             }
         }
     }
 }
-
-// fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashSet<String>, output: &mut Output) {
-//     output.emit(&format!("// compiling node: {:?}", node));
-//     match &mut node.sexp {
-//         SExp::CONS(car, cdr) => {
-//             match &mut car.sexp {
-//                 SExp::CONS(_, _) => {
-//                     output.emit(&format!("// nested cons: {:?}", car));
-//                     compile_node(car, env, compiled_functions, output);
-//                     node.place = car.place.to_string();
-//                 }
-
-//                 SExp::ATOM(_) => {
-//                     let func_name = get_function_name(&car.sexp);
-            
-//                     match func_name.as_str() {
-//                         "defun" => {
-//                             match &mut cdr.sexp {
-//                                 SExp::CONS(defun_name_node, func_def) => {
-//                                     compile_defun(&mut defun_name_node.sexp, func_def, env, compiled_functions, output)
-//                                 }
-
-//                                 _ => panic!("TODO: this"),
-//                             }
-//                         }
-
-//                         "+" => {
-//                             compile_add(&mut *cdr, env, compiled_functions, output);
-//                             node.place = cdr.place.to_string();
-//                         }
-//                         function_name => {
-//                             println!("// function name: {}", function_name);
-//                             node.place = compile_function_call(&func_name, &cdr, env, compiled_functions, output);
-//                             // node.place = cdr.place.to_string();
-//                         }
-//                     }
-//                 }
-//             }
-
-//             output.emit(&format!("attempted to compile {:?}", cdr));
-//             // compile_node(cdr, env, compiled_functions, output);
-            
-            
-//         }
-
-//         SExp::ATOM(atom) => {
-//             match atom {
-//                 Atom::NUM(num) => {
-//                     node.place = format!("SExp::ATOM(Atom::NUM({}))", num);
-//                     // node.place = num.to_string();
-//                 }
-    
-//                 Atom::SYMBOL(symbol) => {
-//                     let new_place = gen_load_sexp(symbol, output);
-
-//                     node.place = new_place;
-//                 }
-    
-//                 Atom::NIL => {
-//                     node.place = format!("SExp::ATOM(Atom::NIL)");
-//                 }
-//             }
-//         }
-//     }
-// }
 
 fn compile_predifined(predefined_code: &str, output: &mut Output) {
     output.emit(predefined_code);
@@ -645,7 +458,7 @@ fn compile(filename: &str) {
 
     let mut compiled_functions = HashMap::<String, u64>::new();
     let predefined_functions = ["add", "sub", "mul", "div"];
-    let predefined_aliases = [("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div")];
+    let predefined_aliases = [("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div"), ("print", "lisp_print")];
 
     for func in &predefined_functions {
         compiled_functions.insert(func.to_string(), 0);
@@ -675,13 +488,6 @@ fn compile(filename: &str) {
     }
     
     for mut node in asts {
-        // match &mut node.sexp {
-        //     SExp::CONS(real_node, next_node) => compile_node(real_node, &mut env, &mut compiled_functions, &mut output),
-        //     SExp::ATOM(_) => {
-        //         // compile_node(&mut node, &mut env, &mut compiled_functions), // not sure this is valid
-        //         panic!("invalid node in compile");
-        //     }
-        // }
         compile_node(&mut node, &mut env, &mut compiled_functions, &mut output);
     }
 
