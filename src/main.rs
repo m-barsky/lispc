@@ -227,7 +227,7 @@ enum LexerToken {
     #[token(")")]
     RPAR,
 
-    #[regex("_?[a-zA-Z]([a-zA-Z0-9]|-)*|(\\+|\\-|\\\\|\\*)", token_identifier)]
+    #[regex("_*[a-zA-Z](-*[a-zA-Z0-9_])*|(\\+|\\-|/|\\*|=)", token_identifier)]
     ID(String),
 
     #[regex("[0-9]+", token_num)]
@@ -381,6 +381,83 @@ let {1} = if {0}.1 {{
     ret_var
 }
 
+fn compile_quoted_node(sexp: &mut SExp, output: &mut Output) -> String {
+    let ret_var = gen_var();
+
+    match sexp {
+        SExp::CONS(car, _) => {
+            let car_place = compile_quoted_node(&mut car.sexp, output);
+
+            // not sure this is correct
+            output.emit(&format!("let mut {} = {};", ret_var, car_place));
+        }
+
+        SExp::ATOM(atom) => {
+            match atom {
+                Atom::NUM(num) => output.emit(&format!("let mut {} = SExp::ATOM(Atom::NUM({}));", ret_var, num)),
+                Atom::SYMBOL(symbol) => output.emit(&format!("let mut {} = SExp::ATOM(Atom::SYMBOL(String::from(\"{}\")));", ret_var, symbol)),
+                Atom::NIL => output.emit(&format!("let mut {} = SExp::ATOM(Atom::NIL);", ret_var)),
+            }
+        }
+    }
+
+    ret_var
+}
+
+fn compile_setq(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String {
+    match &mut node.sexp {
+        SExp::CONS(name_node, cons_node) => {
+            match &mut cons_node.sexp {
+                SExp::CONS(real_value, _) => {
+
+                    compile_node(real_value, env, compiled_functions, output);
+
+                    if let SExp::ATOM(atom) = &mut name_node.sexp {
+                        if let Atom::SYMBOL(name) = atom {
+
+                            // what about setq'ing a function?
+                            output.emit(&format!("env.insert(&String::from(\"{}\"), {}, false);", name, real_value.place));
+
+                            return String::from("SExp::ATOM(Atom::NIL)");
+                        } else {
+                            panic!("invalid value in setq");
+                        }
+                    } else {
+                        panic!("invalid value in setq");
+                    }
+
+                }
+
+                _ => panic!("invalid value in setq"),
+            }
+        }
+
+        _ => panic!("invalid value in setq"),
+    }
+}
+
+fn compile_if(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) -> String {
+    if let SExp::CONS(cond, body_cons) = &mut node.sexp {
+        if let SExp::CONS(body, _) = &mut body_cons.sexp {
+            let ret_var = gen_var();
+            compile_node(cond, env, compiled_functions, output);
+    
+            output.emit(&format!("let mut {} = if {} != SExp::ATOM(Atom::NIL) {{", ret_var, cond.place));
+            compile_node(body, env, compiled_functions, output);
+            output.emit(&format!(
+    "{}
+    }} else {{
+        SExp::ATOM(Atom::NIL)
+    }};",
+             body.place));
+    
+            return ret_var;
+        }
+    }
+
+    panic!("invalid s-exp in if");
+}
+
 fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap<String, u64>, output: &mut Output) {
     output.emit(&format!("// compiling node: {:?}", node));
     match &mut node.sexp {
@@ -397,6 +474,9 @@ fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap
                                     }
                                 }
 
+                                "quote" => node.place = compile_quoted_node(&mut cdr.sexp, output),
+                                "setq" => node.place = compile_setq(cdr, env, compiled_functions, output),
+                                "if" => node.place = compile_if(cdr, env, compiled_functions, output),
                                 function_name => node.place = compile_symbol_lookup(&function_name, cdr, env, compiled_functions, output),
                             }
                         }
@@ -413,9 +493,8 @@ fn compile_node(node: &mut Node, env: &mut Env, compiled_functions: &mut HashMap
                             let var = gen_var();
                             compile_node(cdr, env, compiled_functions, output);
 
-                            output.emit(&format!("let mut {} = SExp::CONS(Box::new(SExp::ATOM(Atom::NIL))), Box::new({}));", var, cdr.place));
+                            output.emit(&format!("let mut {} = SExp::CONS(Box::new(SExp::ATOM(Atom::NIL)), Box::new({}));", var, cdr.place));
                             node.place = var;
-
                         }
                     }
                 }
@@ -456,9 +535,12 @@ fn compile(filename: &str) {
     let predefined_code = load_file("builtins.rs");
     compile_predifined(&predefined_code, &mut output);
 
+    let lexer_code = load_file("lisp_lex.rs");
+    compile_predifined(&lexer_code, &mut output);
+
     let mut compiled_functions = HashMap::<String, u64>::new();
-    let predefined_functions = ["add", "sub", "mul", "div"];
-    let predefined_aliases = [("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div"), ("print", "lisp_print")];
+    let predefined_functions = ["add", "sub", "mul", "div", "eq", "car", "cdr"];
+    let predefined_aliases = [("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div"), ("print", "lisp_print"), ("=", "eq")];
 
     for func in &predefined_functions {
         compiled_functions.insert(func.to_string(), 0);
