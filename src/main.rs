@@ -558,7 +558,7 @@ fn compile(filename: &str) {
     let predefined_functions = ["add", "sub", "mul", "div", "eq", "car", "cdr", "defun"];
     let predefined_aliases = [("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div"), ("print", "lisp_print"), ("=", "eq"), 
         ("read-from-string", "read_from_string"), ("to-num", "to_num"), ("eval", "evaluate"), ("if", "call_if"),
-        ("setq", "call_setq")];
+        ("setq", "call_setq"), ("while", "call_while")];
 
     for func in &predefined_functions {
         compiled_functions.insert(func.to_string(), 0);
